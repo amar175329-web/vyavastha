@@ -107,18 +107,24 @@ export interface IVyavasthaRepository {
   // Layer A: Saved Knowledge
   createKnowledge(item: Partial<KnowledgeItem>): Promise<KnowledgeItem>;
   getKnowledgeById(id: string): Promise<KnowledgeItem | null>;
-  listKnowledge(options?: { limit?: number; offset?: number }): Promise<KnowledgeItem[]>;
+  listKnowledge(options?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<KnowledgeItem[]>;
+  updateKnowledge(id: string, item: Partial<KnowledgeItem>): Promise<KnowledgeItem | null>;
+  deleteKnowledge(id: string): Promise<boolean>;
 
   // Layer B: Personal Memory
   createMemory(item: Partial<PersonalMemoryItem>): Promise<PersonalMemoryItem>;
   getMemoryById(id: string): Promise<PersonalMemoryItem | null>;
-  listMemories(options?: { category?: string }): Promise<PersonalMemoryItem[]>;
+  listMemories(options?: { category?: string; search?: string; limit?: number }): Promise<PersonalMemoryItem[]>;
+  updateMemory(id: string, updates: Partial<PersonalMemoryItem>): Promise<PersonalMemoryItem | null>;
+  deleteMemory(id: string): Promise<boolean>;
 
   // Layer C: Tasks / Intentions
   createTask(item: Partial<TaskItem>): Promise<TaskItem>;
   getTaskById(id: string): Promise<TaskItem | null>;
-  listTasks(options?: { status?: string }): Promise<TaskItem[]>;
+  listTasks(options?: { status?: string; search?: string; limit?: number }): Promise<TaskItem[]>;
+  updateTask(id: string, updates: Partial<TaskItem>): Promise<TaskItem | null>;
   updateTaskStatus(id: string, status: TaskItem["status"]): Promise<TaskItem>;
+  deleteTask(id: string): Promise<boolean>;
 
   // Layer D: Activity History
   logActivity(entry: Partial<ActivityLogEntry>): Promise<ActivityLogEntry>;
@@ -206,11 +212,32 @@ export class DrizzleVyavasthaRepository implements IVyavasthaRepository {
     };
   }
 
-  async listKnowledge(options?: { limit?: number; offset?: number }): Promise<KnowledgeItem[]> {
+  async listKnowledge(options?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<KnowledgeItem[]> {
+    const conditions = [];
+    if (options?.type && options.type !== "all") {
+      conditions.push(eq(knowledgeItems.mediaType, options.type));
+    }
+    if (options?.search && options.search.trim()) {
+      const pattern = `%${options.search.trim()}%`;
+      conditions.push(
+        or(
+          like(knowledgeItems.title, pattern),
+          like(knowledgeItems.summary, pattern),
+          like(knowledgeItems.tags, pattern)
+        )
+      );
+    }
+
     let query = this.db
       .select()
       .from(knowledgeItems)
       .orderBy(desc(knowledgeItems.createdAt));
+
+    if (conditions.length === 1) {
+      query = query.where(conditions[0]) as typeof query;
+    } else if (conditions.length > 1) {
+      query = query.where(and(...conditions)) as typeof query;
+    }
 
     if (options?.limit !== undefined) {
       query = query.limit(options.limit) as typeof query;
@@ -231,6 +258,28 @@ export class DrizzleVyavasthaRepository implements IVyavasthaRepository {
       createdAt: new Date(row.createdAt),
       updatedAt: new Date(row.updatedAt),
     }));
+  }
+
+  async updateKnowledge(id: string, updates: Partial<KnowledgeItem>): Promise<KnowledgeItem | null> {
+    const existing = await this.getKnowledgeById(id);
+    if (!existing) return null;
+    const now = Date.now();
+    const updateData: Record<string, unknown> = { updatedAt: now };
+    if (updates.title !== undefined) updateData.title = updates.title;
+    if (updates.summary !== undefined) updateData.summary = updates.summary;
+    if (updates.rawContent !== undefined) updateData.rawContent = updates.rawContent;
+    if (updates.sourceUrl !== undefined) updateData.sourceUrl = updates.sourceUrl;
+    if (updates.mediaType !== undefined) updateData.mediaType = updates.mediaType;
+    if (updates.tags !== undefined) updateData.tags = JSON.stringify(updates.tags);
+    await this.db.update(knowledgeItems).set(updateData).where(eq(knowledgeItems.id, id));
+    return this.getKnowledgeById(id);
+  }
+
+  async deleteKnowledge(id: string): Promise<boolean> {
+    const existing = await this.getKnowledgeById(id);
+    if (!existing) return false;
+    await this.db.delete(knowledgeItems).where(eq(knowledgeItems.id, id));
+    return true;
   }
 
   // --- Layer B: Personal Memory ---
@@ -291,14 +340,34 @@ export class DrizzleVyavasthaRepository implements IVyavasthaRepository {
     };
   }
 
-  async listMemories(options?: { category?: string }): Promise<PersonalMemoryItem[]> {
+  async listMemories(options?: { category?: string; search?: string; limit?: number }): Promise<PersonalMemoryItem[]> {
+    const conditions = [];
+    if (options?.category && options.category !== "all") {
+      conditions.push(eq(personalMemoryItems.category, options.category));
+    }
+    if (options?.search && options.search.trim()) {
+      const pattern = `%${options.search.trim()}%`;
+      conditions.push(
+        or(
+          like(personalMemoryItems.key, pattern),
+          like(personalMemoryItems.value, pattern)
+        )
+      );
+    }
+
     let query = this.db
       .select()
       .from(personalMemoryItems)
       .orderBy(desc(personalMemoryItems.createdAt));
 
-    if (options?.category) {
-      query = query.where(eq(personalMemoryItems.category, options.category)) as typeof query;
+    if (conditions.length === 1) {
+      query = query.where(conditions[0]) as typeof query;
+    } else if (conditions.length > 1) {
+      query = query.where(and(...conditions)) as typeof query;
+    }
+
+    if (options?.limit !== undefined) {
+      query = query.limit(options.limit) as typeof query;
     }
 
     const rows = await query;
@@ -313,6 +382,28 @@ export class DrizzleVyavasthaRepository implements IVyavasthaRepository {
       createdAt: new Date(row.createdAt),
       updatedAt: new Date(row.updatedAt),
     }));
+  }
+
+  async updateMemory(id: string, updates: Partial<PersonalMemoryItem>): Promise<PersonalMemoryItem | null> {
+    const existing = await this.getMemoryById(id);
+    if (!existing) return null;
+    const now = Date.now();
+    const updateData: Record<string, unknown> = { updatedAt: now };
+    if (updates.key !== undefined) updateData.key = updates.key;
+    if (updates.value !== undefined) updateData.value = updates.value;
+    if (updates.category !== undefined) updateData.category = updates.category;
+    if (updates.confidenceScore !== undefined) updateData.confidenceScore = updates.confidenceScore;
+    if (updates.confirmedByUser !== undefined) updateData.confirmedByUser = updates.confirmedByUser ? 1 : 0;
+    if (updates.provenanceSourceId !== undefined) updateData.provenanceSourceId = updates.provenanceSourceId;
+    await this.db.update(personalMemoryItems).set(updateData).where(eq(personalMemoryItems.id, id));
+    return this.getMemoryById(id);
+  }
+
+  async deleteMemory(id: string): Promise<boolean> {
+    const existing = await this.getMemoryById(id);
+    if (!existing) return false;
+    await this.db.delete(personalMemoryItems).where(eq(personalMemoryItems.id, id));
+    return true;
   }
 
   // --- Layer C: Tasks / Intentions ---
@@ -375,14 +466,34 @@ export class DrizzleVyavasthaRepository implements IVyavasthaRepository {
     };
   }
 
-  async listTasks(options?: { status?: string }): Promise<TaskItem[]> {
+  async listTasks(options?: { status?: string; search?: string; limit?: number }): Promise<TaskItem[]> {
+    const conditions = [];
+    if (options?.status && options.status !== "all") {
+      conditions.push(eq(taskItems.status, options.status));
+    }
+    if (options?.search && options.search.trim()) {
+      const pattern = `%${options.search.trim()}%`;
+      conditions.push(
+        or(
+          like(taskItems.title, pattern),
+          like(taskItems.description, pattern)
+        )
+      );
+    }
+
     let query = this.db
       .select()
       .from(taskItems)
       .orderBy(desc(taskItems.createdAt));
 
-    if (options?.status) {
-      query = query.where(eq(taskItems.status, options.status)) as typeof query;
+    if (conditions.length === 1) {
+      query = query.where(conditions[0]) as typeof query;
+    } else if (conditions.length > 1) {
+      query = query.where(and(...conditions)) as typeof query;
+    }
+
+    if (options?.limit !== undefined) {
+      query = query.limit(options.limit) as typeof query;
     }
 
     const rows = await query;
@@ -397,6 +508,38 @@ export class DrizzleVyavasthaRepository implements IVyavasthaRepository {
       createdAt: new Date(row.createdAt),
       updatedAt: new Date(row.updatedAt),
     }));
+  }
+
+  async updateTask(id: string, updates: Partial<TaskItem>): Promise<TaskItem | null> {
+    const existing = await this.getTaskById(id);
+    if (!existing) return null;
+    const now = Date.now();
+    const updateData: Record<string, unknown> = { updatedAt: now };
+    if (updates.title !== undefined) updateData.title = updates.title;
+    if (updates.description !== undefined) updateData.description = updates.description;
+    if (updates.status !== undefined) {
+      updateData.status = updates.status;
+      if (updates.status === "completed") {
+        updateData.completedAt = now;
+      } else if (updates.completedAt === undefined) {
+        updateData.completedAt = null;
+      }
+    }
+    if (updates.completedAt !== undefined) {
+      updateData.completedAt = updates.completedAt instanceof Date ? updates.completedAt.getTime() : null;
+    }
+    if (updates.dueDate !== undefined) {
+      updateData.dueDate = updates.dueDate instanceof Date ? updates.dueDate.getTime() : null;
+    }
+    await this.db.update(taskItems).set(updateData).where(eq(taskItems.id, id));
+    return this.getTaskById(id);
+  }
+
+  async deleteTask(id: string): Promise<boolean> {
+    const existing = await this.getTaskById(id);
+    if (!existing) return false;
+    await this.db.delete(taskItems).where(eq(taskItems.id, id));
+    return true;
   }
 
   async updateTaskStatus(id: string, status: TaskItem["status"]): Promise<TaskItem> {
@@ -615,8 +758,14 @@ export class UnimplementedVyavasthaRepository implements IVyavasthaRepository {
   async getKnowledgeById(_id: string): Promise<KnowledgeItem | null> {
     throw new NotImplementedError("getKnowledgeById");
   }
-  async listKnowledge(_options?: { limit?: number; offset?: number }): Promise<KnowledgeItem[]> {
+  async listKnowledge(_options?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<KnowledgeItem[]> {
     throw new NotImplementedError("listKnowledge");
+  }
+  async updateKnowledge(_id: string, _item: Partial<KnowledgeItem>): Promise<KnowledgeItem | null> {
+    throw new NotImplementedError("updateKnowledge");
+  }
+  async deleteKnowledge(_id: string): Promise<boolean> {
+    throw new NotImplementedError("deleteKnowledge");
   }
 
   async createMemory(_item: Partial<PersonalMemoryItem>): Promise<PersonalMemoryItem> {
@@ -625,8 +774,14 @@ export class UnimplementedVyavasthaRepository implements IVyavasthaRepository {
   async getMemoryById(_id: string): Promise<PersonalMemoryItem | null> {
     throw new NotImplementedError("getMemoryById");
   }
-  async listMemories(_options?: { category?: string }): Promise<PersonalMemoryItem[]> {
+  async listMemories(_options?: { category?: string; search?: string; limit?: number }): Promise<PersonalMemoryItem[]> {
     throw new NotImplementedError("listMemories");
+  }
+  async updateMemory(_id: string, _updates: Partial<PersonalMemoryItem>): Promise<PersonalMemoryItem | null> {
+    throw new NotImplementedError("updateMemory");
+  }
+  async deleteMemory(_id: string): Promise<boolean> {
+    throw new NotImplementedError("deleteMemory");
   }
 
   async createTask(_item: Partial<TaskItem>): Promise<TaskItem> {
@@ -635,11 +790,17 @@ export class UnimplementedVyavasthaRepository implements IVyavasthaRepository {
   async getTaskById(_id: string): Promise<TaskItem | null> {
     throw new NotImplementedError("getTaskById");
   }
-  async listTasks(_options?: { status?: string }): Promise<TaskItem[]> {
+  async listTasks(_options?: { status?: string; search?: string; limit?: number }): Promise<TaskItem[]> {
     throw new NotImplementedError("listTasks");
+  }
+  async updateTask(_id: string, _updates: Partial<TaskItem>): Promise<TaskItem | null> {
+    throw new NotImplementedError("updateTask");
   }
   async updateTaskStatus(_id: string, _status: TaskItem["status"]): Promise<TaskItem> {
     throw new NotImplementedError("updateTaskStatus");
+  }
+  async deleteTask(_id: string): Promise<boolean> {
+    throw new NotImplementedError("deleteTask");
   }
 
   async logActivity(_entry: Partial<ActivityLogEntry>): Promise<ActivityLogEntry> {

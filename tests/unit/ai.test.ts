@@ -274,7 +274,7 @@ describe("AI Cognitive Intelligence Layer (src/ai)", () => {
         contents: [{ role: "user", parts: [{ text: "What is the answer?" }] }],
       });
 
-      expect(interceptedUrl).toContain("/models/gemini-2.0-flash:generateContent");
+      expect(interceptedUrl).toContain("/models/gemini-3.6-flash:generateContent");
       expect((interceptedHeaders as Record<string, string>)["x-goog-api-key"]).toBe(
         "AIzaSyMockTestKey_1234567890"
       );
@@ -503,11 +503,11 @@ describe("AI Cognitive Intelligence Layer (src/ai)", () => {
 
   describe("Configuration (src/ai/config.ts)", () => {
     test("provides configured defaults for fast and deep models", () => {
-      expect(AI_MODELS.fast).toBe("gemini-2.0-flash");
-      expect(AI_MODELS.deep).toBe("gemini-1.5-pro");
-      expect(CONTENT_UNDERSTANDING_CONFIG.model).toBe("gemini-2.0-flash");
-      expect(CHAT_SYNTHESIS_CONFIG.model).toBe("gemini-2.0-flash");
-      expect(WEEKLY_REVIEW_CONFIG.model).toBe("gemini-1.5-pro");
+      expect(AI_MODELS.fast).toBe("gemini-3.6-flash");
+      expect(AI_MODELS.deep).toBe("gemini-3.6-flash");
+      expect(CONTENT_UNDERSTANDING_CONFIG.model).toBe("gemini-3.6-flash");
+      expect(CHAT_SYNTHESIS_CONFIG.model).toBe("gemini-3.6-flash");
+      expect(WEEKLY_REVIEW_CONFIG.model).toBe("gemini-3.6-flash");
       expect(CONTENT_UNDERSTANDING_CONFIG.temperature).toBe(0.1);
       expect(CHAT_SYNTHESIS_CONFIG.temperature).toBe(0.3);
       expect(WEEKLY_REVIEW_CONFIG.temperature).toBe(0.4);

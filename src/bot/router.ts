@@ -8,6 +8,7 @@
 
 import { pingDatabase } from "../db/client";
 import {
+  getRepository,
   UnimplementedVyavasthaRepository,
   type IVyavasthaRepository,
   type TaskItem,
@@ -34,6 +35,7 @@ import type {
   TelegramUpdate,
 } from "./types";
 import type { IngestionRequest, IngestionType } from "../ingestion/types";
+import { processUnifiedIngestion } from "../ingestion/unified";
 
 export interface TelegramRouterOptions {
   client?: TelegramClient;
@@ -163,8 +165,8 @@ export class TelegramRouter {
 
   constructor(options?: TelegramRouterOptions) {
     this.client = options?.client ?? new TelegramClient();
-    this.repository = options?.repository ?? new UnimplementedVyavasthaRepository();
-    this.ingestionProcessor = options?.ingestionProcessor ?? defaultIngestionProcessor;
+    this.repository = options?.repository ?? getRepository();
+    this.ingestionProcessor = options?.ingestionProcessor ?? ((req) => processUnifiedIngestion(req, this.repository));
     this.authConfig = options?.authConfig;
     this.rejectSilently = options?.rejectSilently ?? false;
   }

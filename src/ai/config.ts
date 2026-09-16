@@ -6,9 +6,10 @@
  */
 
 export const AI_MODELS = {
-  fast: "gemini-2.0-flash",
-  deep: "gemini-1.5-pro",
-  default: "gemini-2.0-flash",
+  fast: "gemini-3.6-flash",
+  deep: "gemini-3.6-flash",
+  default: "gemini-3.6-flash",
+  fallback: "gemini-3.6-flash",
 } as const;
 
 export type AiModelName = (typeof AI_MODELS)[keyof typeof AI_MODELS] | string;

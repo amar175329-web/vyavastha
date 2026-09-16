@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listMemories,
-  createMemory,
-  updateMemory,
-  deleteMemory,
-  type PersonalMemoryItem,
-} from "../_data/store";
+import { getRepository, type PersonalMemoryItem } from "@/db/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +9,8 @@ export async function GET(req: NextRequest) {
     const category = searchParams.get("category") || undefined;
     const search = searchParams.get("search") || undefined;
 
-    const items = listMemories({ category, search });
+    const repo = getRepository();
+    const items = await repo.listMemories({ category, search });
     return NextResponse.json({ items, count: items.length });
   } catch (error) {
     console.error("[API/Memory] GET error:", error);
@@ -48,13 +43,20 @@ export async function POST(req: NextRequest) {
       ? category
       : "fact";
 
-    const item = createMemory({
+    const repo = getRepository();
+    const item = await repo.createMemory({
       category: resolvedCategory,
-      key,
-      value,
+      key: key.trim(),
+      value: value.trim(),
       provenanceSourceId,
-      confidenceScore,
-      confirmedByUser,
+      confidenceScore: typeof confidenceScore === "number" ? confidenceScore : 1.0,
+      confirmedByUser: Boolean(confirmedByUser),
+    });
+
+    await repo.logActivity({
+      channel: "web",
+      eventType: "memory_created",
+      metadata: { id: item.id, key: item.key, category: item.category },
     });
 
     return NextResponse.json({ item }, { status: 201 });
@@ -73,7 +75,8 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Memory ID is required" }, { status: 400 });
     }
 
-    const updated = updateMemory(id, {
+    const repo = getRepository();
+    const updated = await repo.updateMemory(id, {
       confirmedByUser,
       value,
       key,
@@ -84,6 +87,12 @@ export async function PATCH(req: NextRequest) {
     if (!updated) {
       return NextResponse.json({ error: "Memory not found" }, { status: 404 });
     }
+
+    await repo.logActivity({
+      channel: "web",
+      eventType: "memory_updated",
+      metadata: { id, confirmedByUser: updated.confirmedByUser },
+    });
 
     return NextResponse.json({ item: updated });
   } catch (error) {
@@ -101,10 +110,17 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Memory ID is required" }, { status: 400 });
     }
 
-    const success = deleteMemory(id);
+    const repo = getRepository();
+    const success = await repo.deleteMemory(id);
     if (!success) {
       return NextResponse.json({ error: "Memory not found" }, { status: 404 });
     }
+
+    await repo.logActivity({
+      channel: "web",
+      eventType: "memory_deleted",
+      metadata: { id },
+    });
 
     return NextResponse.json({ ok: true, id });
   } catch (error) {

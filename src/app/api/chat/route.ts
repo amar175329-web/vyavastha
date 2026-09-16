@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchAll, listKnowledge, listMemories, listTasks } from "../_data/store";
+import { getRepository } from "@/db/repository";
+import { ChatRetriever } from "@/search/chat-retriever";
+import { AiService } from "@/ai/service";
+import { logger } from "@/lib/logger";
+import type { RetrievedChatContext } from "@/ai/types";
 
 export const dynamic = "force-dynamic";
 
@@ -20,127 +24,129 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
-    const q = message.trim();
-    const lower = q.toLowerCase();
+    const query = message.trim();
+    const repo = getRepository();
+    const retriever = new ChatRetriever(repo);
 
-    // Special queries: tasks, memory, recent knowledge
-    const citations: Citation[] = [];
+    // Retrieve across Layers A, B, and C
+    const retrieval = await retriever.retrieve(query);
+    const hasItems = retrieval.items.length > 0;
+
     let responseText = "";
+    let citations: Citation[] = [];
 
-    if (lower.includes("task") || lower.includes("todo") || lower.includes("intention") || lower.includes("pending")) {
-      const allTasks = listTasks();
-      const pendingTasks = allTasks.filter((t) => t.status === "pending" || t.status === "in_progress");
+    // Map retrieved search items to default citations
+    const defaultCitations: Citation[] = retrieval.items.slice(0, 5).map((item) => ({
+      id: item.id,
+      type: (item.layer === "knowledge" ? "knowledge" : item.layer === "memory" ? "memory" : "task") as Citation["type"],
+      title: item.title,
+      snippet: item.snippet,
+      url: item.sourceUrl,
+    }));
 
-      if (pendingTasks.length === 0) {
-        responseText = "You currently have no pending tasks or intentions. All tracked items are either completed or your task list is clear.";
+    if (!hasItems) {
+      // Unrelated query or empty repository: DO NOT FABRICATE
+      const [allK, allM, allT] = await Promise.all([
+        repo.listKnowledge({ limit: 1 }),
+        repo.listMemories({ limit: 1 }),
+        repo.listTasks({ limit: 1 }),
+      ]);
+
+      const totalCount = allK.length + allM.length + allT.length;
+      if (totalCount === 0) {
+        responseText =
+          "Your personal VYAVASTHA workshop is currently empty.\n\n" +
+          "You can capture notes, save articles, or ingest URLs from the **Library** or via the **Telegram bot** to begin querying your second brain.";
       } else {
-        responseText = `You have **${pendingTasks.length} active intention${pendingTasks.length > 1 ? "s" : ""}** in motion:\n\n` +
-          pendingTasks.map((t, idx) => {
-            const due = t.dueDate ? ` *(due ${new Date(t.dueDate).toLocaleDateString()})*` : "";
-            const statusBadge = t.status === "in_progress" ? " `[in progress]`" : "";
-            return `${idx + 1}. **${t.title}**${statusBadge}${due}${t.description ? ` — ${t.description}` : ""}`;
-          }).join("\n");
-
-        for (const t of pendingTasks.slice(0, 4)) {
-          citations.push({
-            id: t.id,
-            type: "task",
-            title: t.title,
-            snippet: t.description || `Task status: ${t.status}`,
-          });
-        }
+        responseText =
+          `I searched your personal knowledge base, memories, and active tasks for **"${query}"**, but found no relevant records.\n\n` +
+          "To preserve strict provenance and prevent hallucinations, I only provide answers grounded in your verified data. Try searching for other keywords, or capture this information into your Library.";
       }
-    } else if (lower.includes("memory") || lower.includes("preference") || lower.includes("identity") || lower.includes("who am i")) {
-      const allMemories = listMemories();
-
-      if (allMemories.length === 0) {
-        responseText = "No personal memory assertions have been recorded yet. As you ingest notes or confirm facts in the Memory workshop, your identity and preference profile will appear here.";
-      } else {
-        responseText = `Here are your confirmed and recorded personal memory assertions:\n\n` +
-          allMemories.map((m) => {
-            const badge = m.confirmedByUser ? "✓ Confirmed" : "Proposed";
-            return `• **${m.key}**: ${m.value} *(${m.category}, ${badge})*`;
-          }).join("\n");
-
-        for (const m of allMemories.slice(0, 4)) {
-          citations.push({
-            id: m.id,
-            type: "memory",
-            title: m.key,
-            snippet: m.value,
-          });
-        }
-      }
+      citations = [];
     } else {
-      // General semantic / lexical lookup
-      const searchResults = searchAll(q);
+      // Grounded AI synthesis with graceful fallback
+      try {
+        const aiService = new AiService();
+        const structuredContext: RetrievedChatContext = {
+          knowledge: retrieval.grouped.knowledge.map((k) => ({
+            id: k.id,
+            title: k.title,
+            summary: k.snippet,
+            snippet: k.snippet,
+            sourceUrl: k.sourceUrl,
+            mediaType: k.mediaType,
+          })),
+          memories: retrieval.grouped.memory.map((m) => ({
+            id: m.id,
+            category: m.category,
+            key: m.title,
+            value: m.snippet,
+          })),
+          tasks: retrieval.grouped.tasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            description: t.snippet,
+            status: t.status,
+          })),
+        };
 
-      if (
-        searchResults.knowledge.length === 0 &&
-        searchResults.memories.length === 0 &&
-        searchResults.tasks.length === 0
-      ) {
-        const totalKnowledge = listKnowledge();
-        if (totalKnowledge.length === 0) {
-          responseText = `I searched your personal knowledge base, but your library is currently empty.\n\nYou can ingest articles, YouTube videos, Instagram posts, or write raw notes in the **Library** (` + "`/library`" + `) to begin querying your personal knowledge.`;
+        const aiResponse = await aiService.synthesizeChatResponse({
+          query,
+          conversationHistory: [],
+          retrievedContext: structuredContext,
+        });
+
+        responseText = aiResponse.reply;
+
+        if (Array.isArray(aiResponse.citations) && aiResponse.citations.length > 0) {
+          citations = aiResponse.citations.map((c) => {
+            const found = retrieval.items.find((item) => item.id === c.id);
+            const resolvedType: Citation["type"] =
+              c.type === "memory" ? "memory" : c.type === "task" || c.type === "tasks" ? "task" : "knowledge";
+            return {
+              id: c.id,
+              type: resolvedType,
+              title: c.title,
+              snippet: found ? found.snippet : c.title,
+              url: found?.sourceUrl,
+            };
+          });
         } else {
-          responseText = `I searched your personal knowledge library for "${q}", but found no direct matches across your ${totalKnowledge.length} saved item(s) or memory records.\n\nTry searching for broader keywords, or check your **Library** tab directly.`;
+          citations = defaultCitations;
         }
-      } else {
+      } catch (aiErr) {
+        logger.warn("[API/Chat] AI synthesis unavailable, falling back to grounded search summary", {
+          error: String(aiErr),
+        });
+
+        // Fallback grounded answer built directly from retrieval
         const sections: string[] = [];
 
-        if (searchResults.knowledge.length > 0) {
+        if (retrieval.grouped.knowledge.length > 0) {
           sections.push(
-            `### From Your Saved Knowledge:\n` +
-              searchResults.knowledge
-                .map((k) => `• **${k.title}** (${k.mediaType}): ${k.summary}`)
+            `### Saved Knowledge:\n` +
+              retrieval.grouped.knowledge
+                .map((k) => `• **${k.title}**: ${k.snippet}`)
                 .join("\n\n")
           );
-
-          for (const k of searchResults.knowledge) {
-            citations.push({
-              id: k.id,
-              type: "knowledge",
-              title: k.title,
-              snippet: k.summary,
-              url: k.sourceUrl,
-            });
-          }
         }
 
-        if (searchResults.memories.length > 0) {
+        if (retrieval.grouped.memory.length > 0) {
           sections.push(
-            `### From Your Personal Memory:\n` +
-              searchResults.memories.map((m) => `• **${m.key}**: ${m.value}`).join("\n")
+            `### Personal Memory:\n` +
+              retrieval.grouped.memory.map((m) => `• **${m.title}**: ${m.snippet}`).join("\n")
           );
-
-          for (const m of searchResults.memories) {
-            citations.push({
-              id: m.id,
-              type: "memory",
-              title: m.key,
-              snippet: m.value,
-            });
-          }
         }
 
-        if (searchResults.tasks.length > 0) {
+        if (retrieval.grouped.tasks.length > 0) {
           sections.push(
-            `### Related Intentions:\n` +
-              searchResults.tasks.map((t) => `• [${t.status}] **${t.title}**`).join("\n")
+            `### Active Intentions / Tasks:\n` +
+              retrieval.grouped.tasks.map((t) => `• **${t.title}**: ${t.snippet}`).join("\n")
           );
-
-          for (const t of searchResults.tasks) {
-            citations.push({
-              id: t.id,
-              type: "task",
-              title: t.title,
-              snippet: t.description || `Status: ${t.status}`,
-            });
-          }
         }
 
         responseText = sections.join("\n\n");
+        citations = defaultCitations;
       }
     }
 

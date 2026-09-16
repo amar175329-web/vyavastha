@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  listTasks,
-  createTask,
-  updateTask,
-  deleteTask,
-  type TaskItem,
-} from "../_data/store";
+import { getRepository, type TaskItem } from "@/db/repository";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +9,8 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get("status") || undefined;
     const search = searchParams.get("search") || undefined;
 
-    const items = listTasks({ status, search });
+    const repo = getRepository();
+    const items = await repo.listTasks({ status, search });
     return NextResponse.json({ items, count: items.length });
   } catch (error) {
     console.error("[API/Tasks] GET error:", error);
@@ -35,12 +30,19 @@ export async function POST(req: NextRequest) {
     const validStatuses: TaskItem["status"][] = ["pending", "in_progress", "completed", "cancelled"];
     const resolvedStatus: TaskItem["status"] = validStatuses.includes(status) ? status : "pending";
 
-    const item = createTask({
-      title,
-      description,
+    const repo = getRepository();
+    const item = await repo.createTask({
+      title: title.trim(),
+      description: description ? String(description).trim() : undefined,
       status: resolvedStatus,
       sourceKnowledgeId,
-      dueDate,
+      dueDate: dueDate ? new Date(dueDate) : undefined,
+    });
+
+    await repo.logActivity({
+      channel: "web",
+      eventType: "task_created",
+      metadata: { id: item.id, title: item.title, status: item.status },
     });
 
     return NextResponse.json({ item }, { status: 201 });
@@ -59,16 +61,23 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "Task ID is required" }, { status: 400 });
     }
 
-    const updated = updateTask(id, {
+    const repo = getRepository();
+    const updated = await repo.updateTask(id, {
       status,
       title,
       description,
-      dueDate,
+      dueDate: dueDate ? new Date(dueDate) : undefined,
     });
 
     if (!updated) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
+
+    await repo.logActivity({
+      channel: "web",
+      eventType: "task_updated",
+      metadata: { id, status: updated.status },
+    });
 
     return NextResponse.json({ item: updated });
   } catch (error) {
@@ -86,10 +95,17 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Task ID is required" }, { status: 400 });
     }
 
-    const success = deleteTask(id);
+    const repo = getRepository();
+    const success = await repo.deleteTask(id);
     if (!success) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
+
+    await repo.logActivity({
+      channel: "web",
+      eventType: "task_deleted",
+      metadata: { id },
+    });
 
     return NextResponse.json({ ok: true, id });
   } catch (error) {
