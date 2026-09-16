@@ -18,13 +18,12 @@ export interface Citation {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { message } = body;
-
-    if (!message || typeof message !== "string" || !message.trim()) {
+    const rawMessage = body.message || body.query;
+    if (!rawMessage || typeof rawMessage !== "string" || !rawMessage.trim()) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
-    const query = message.trim();
+    const query = rawMessage.trim();
     const repo = getRepository();
     const retriever = new ChatRetriever(repo);
 
@@ -123,12 +122,8 @@ export async function POST(req: NextRequest) {
               };
             })
             .filter(Boolean) as Citation[];
-          
-          if (citations.length === 0) {
-            citations = defaultCitations;
-          }
         } else {
-          citations = defaultCitations;
+          citations = [];
         }
       } catch (aiErr) {
         logger.warn("[API/Chat] AI synthesis unavailable, falling back to grounded search summary", {

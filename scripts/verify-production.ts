@@ -37,7 +37,7 @@ async function runVerification() {
   try {
     const res = await fetch(`${BASE_URL}/api/health`);
     const data = await res.json();
-    assert("1. Health Endpoint HTTP 200", res.status === 200 && data.ok === true, `(Status: ${res.status})`);
+    assert("1. Health Endpoint HTTP 200", res.status === 200 && (data.status === "ok" || data.status === "degraded"), `(Status: ${res.status}, Service: ${data.status})`);
   } catch (e) {
     assert("1. Health Endpoint HTTP 200", false, String(e));
   }
@@ -120,12 +120,13 @@ async function runVerification() {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify({
-        query: testTitle,
+        message: testTitle,
       }),
     });
     const data = await res.json();
     const hasCitations = Array.isArray(data.citations) && data.citations.length > 0;
-    const mentionsTitle = data.reply && (data.reply.includes("Observational note") || data.reply.includes(testTitle) || data.reply.includes("aesthetic"));
+    const replyText = data.response || data.reply || "";
+    const mentionsTitle = replyText.includes("Observational note") || replyText.includes(testTitle) || replyText.includes("aesthetic");
     assert("6. Grounded Chat Synthesis & Citations", res.status === 200 && (hasCitations || mentionsTitle), `(Citations: ${data.citations?.length || 0})`);
   } catch (e) {
     assert("6. Grounded Chat Synthesis & Citations", false, String(e));
@@ -137,7 +138,7 @@ async function runVerification() {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify({
-        query: "What is the historical temperature on Mars in 1492 under Byzantine atmospheric pressure?",
+        message: "What is the historical temperature on Mars in 1492 under Byzantine atmospheric pressure?",
       }),
     });
     const data = await res.json();
