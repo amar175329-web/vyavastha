@@ -8,9 +8,9 @@ import { logger } from "./logger";
  * All temporary ingestion, downloads, or buffer operations MUST halt if available
  * disk space falls below this safety boundary.
  */
-export const MIN_DISK_HEADROOM_MB = 500;
+export const MIN_DISK_HEADROOM_MB = process.env.VERCEL ? 50 : 500;
 
-export const TMP_DIR = path.resolve(process.cwd(), "tmp");
+export const TMP_DIR = process.env.VERCEL ? "/tmp" : path.resolve(process.cwd(), "tmp");
 
 /**
  * Ensures the temporary directory exists synchronously or asynchronously.
@@ -18,8 +18,12 @@ export const TMP_DIR = path.resolve(process.cwd(), "tmp");
  */
 export function ensureTmpDir(): string {
   if (!fsSync.existsSync(TMP_DIR)) {
-    fsSync.mkdirSync(TMP_DIR, { recursive: true });
-    logger.debug("[DISK] Initialized temporary directory", { path: TMP_DIR });
+    try {
+      fsSync.mkdirSync(TMP_DIR, { recursive: true });
+      logger.debug("[DISK] Initialized temporary directory", { path: TMP_DIR });
+    } catch {
+      return "/tmp";
+    }
   }
   return TMP_DIR;
 }

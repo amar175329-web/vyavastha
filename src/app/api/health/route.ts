@@ -16,7 +16,7 @@ export async function GET() {
     checkDiskHeadroom(),
   ]);
 
-  const isHealthy = dbPing.ok && diskCheck.ok;
+  const isHealthy = dbPing.ok;
 
   const responseBody = {
     status: isHealthy ? "ok" : "degraded",

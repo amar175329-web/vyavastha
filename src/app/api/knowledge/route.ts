@@ -44,8 +44,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 });
     }
 
-    if (!summary || typeof summary !== "string" || !summary.trim()) {
-      return NextResponse.json({ error: "Summary is required" }, { status: 400 });
+    const finalSummary = (summary && typeof summary === "string" && summary.trim())
+      ? summary.trim()
+      : (content && typeof content === "string" && content.trim() ? content.trim().slice(0, 300) : "");
+
+    if (!finalSummary) {
+      return NextResponse.json({ error: "Summary or content is required" }, { status: 400 });
     }
 
     const validMediaTypes: KnowledgeItem["mediaType"][] = [
@@ -63,10 +67,10 @@ export async function POST(req: NextRequest) {
 
     const item = await repo.createKnowledge({
       title: title.trim(),
-      summary: summary.trim(),
+      summary: finalSummary,
       mediaType: resolvedType,
       sourceUrl,
-      rawContent,
+      rawContent: rawContent || content,
       tags: Array.isArray(tags) ? tags : [],
     });
 
