@@ -30,13 +30,16 @@ export async function POST(req: NextRequest) {
 
     // Retrieve across Layers A, B, and C
     const retrieval = await retriever.retrieve(query);
-    const hasItems = retrieval.items.length > 0;
+    
+    // Strict relevance threshold to prevent hallucination on unrelated queries
+    const relevantItems = retrieval.items.filter((item) => item.score >= 0.25);
+    const hasItems = relevantItems.length > 0;
 
     let responseText = "";
     let citations: Citation[] = [];
 
-    // Map retrieved search items to default citations
-    const defaultCitations: Citation[] = retrieval.items.slice(0, 5).map((item) => ({
+    // Map relevant search items to default citations
+    const defaultCitations: Citation[] = relevantItems.slice(0, 5).map((item) => ({
       id: item.id,
       type: (item.layer === "knowledge" ? "knowledge" : item.layer === "memory" ? "memory" : "task") as Citation["type"],
       title: item.title,
@@ -68,26 +71,32 @@ export async function POST(req: NextRequest) {
       try {
         const aiService = new AiService();
         const structuredContext: RetrievedChatContext = {
-          knowledge: retrieval.grouped.knowledge.map((k) => ({
-            id: k.id,
-            title: k.title,
-            summary: k.snippet,
-            snippet: k.snippet,
-            sourceUrl: k.sourceUrl,
-            mediaType: k.mediaType,
-          })),
-          memories: retrieval.grouped.memory.map((m) => ({
-            id: m.id,
-            category: m.category,
-            key: m.title,
-            value: m.snippet,
-          })),
-          tasks: retrieval.grouped.tasks.map((t) => ({
-            id: t.id,
-            title: t.title,
-            description: t.snippet,
-            status: t.status,
-          })),
+          knowledge: retrieval.grouped.knowledge
+            .filter((k) => k.score >= 0.25)
+            .map((k) => ({
+              id: k.id,
+              title: k.title,
+              summary: k.snippet,
+              snippet: k.snippet,
+              sourceUrl: k.sourceUrl,
+              mediaType: k.mediaType,
+            })),
+          memories: retrieval.grouped.memory
+            .filter((m) => m.score >= 0.25)
+            .map((m) => ({
+              id: m.id,
+              category: m.category,
+              key: m.title,
+              value: m.snippet,
+            })),
+          tasks: retrieval.grouped.tasks
+            .filter((t) => t.score >= 0.25)
+            .map((t) => ({
+              id: t.id,
+              title: t.title,
+              description: t.snippet,
+              status: t.status,
+            })),
         };
 
         const aiResponse = await aiService.synthesizeChatResponse({
@@ -99,18 +108,25 @@ export async function POST(req: NextRequest) {
         responseText = aiResponse.reply;
 
         if (Array.isArray(aiResponse.citations) && aiResponse.citations.length > 0) {
-          citations = aiResponse.citations.map((c) => {
-            const found = retrieval.items.find((item) => item.id === c.id);
-            const resolvedType: Citation["type"] =
-              c.type === "memory" ? "memory" : c.type === "task" || c.type === "tasks" ? "task" : "knowledge";
-            return {
-              id: c.id,
-              type: resolvedType,
-              title: c.title,
-              snippet: found ? found.snippet : c.title,
-              url: found?.sourceUrl,
-            };
-          });
+          citations = aiResponse.citations
+            .map((c) => {
+              const found = relevantItems.find((item) => item.id === c.id);
+              if (!found) return null;
+              const resolvedType: Citation["type"] =
+                c.type === "memory" ? "memory" : c.type === "task" || c.type === "tasks" ? "task" : "knowledge";
+              return {
+                id: c.id,
+                type: resolvedType,
+                title: c.title,
+                snippet: found.snippet,
+                url: found.sourceUrl,
+              };
+            })
+            .filter(Boolean) as Citation[];
+          
+          if (citations.length === 0) {
+            citations = defaultCitations;
+          }
         } else {
           citations = defaultCitations;
         }
@@ -122,26 +138,27 @@ export async function POST(req: NextRequest) {
         // Fallback grounded answer built directly from retrieval
         const sections: string[] = [];
 
-        if (retrieval.grouped.knowledge.length > 0) {
+        const relK = retrieval.grouped.knowledge.filter((k) => k.score >= 0.25);
+        if (relK.length > 0) {
           sections.push(
             `### Saved Knowledge:\n` +
-              retrieval.grouped.knowledge
-                .map((k) => `• **${k.title}**: ${k.snippet}`)
-                .join("\n\n")
+              relK.map((k) => `• **${k.title}**: ${k.snippet}`).join("\n\n")
           );
         }
 
-        if (retrieval.grouped.memory.length > 0) {
+        const relM = retrieval.grouped.memory.filter((m) => m.score >= 0.25);
+        if (relM.length > 0) {
           sections.push(
             `### Personal Memory:\n` +
-              retrieval.grouped.memory.map((m) => `• **${m.title}**: ${m.snippet}`).join("\n")
+              relM.map((m) => `• **${m.title}**: ${m.snippet}`).join("\n")
           );
         }
 
-        if (retrieval.grouped.tasks.length > 0) {
+        const relT = retrieval.grouped.tasks.filter((t) => t.score >= 0.25);
+        if (relT.length > 0) {
           sections.push(
             `### Active Intentions / Tasks:\n` +
-              retrieval.grouped.tasks.map((t) => `• **${t.title}**: ${t.snippet}`).join("\n")
+              relT.map((t) => `• **${t.title}**: ${t.snippet}`).join("\n")
           );
         }
 
